@@ -1,0 +1,175 @@
+#define BLYNK_TEMPLATE_ID "TMPL6nKD1ScLU"
+#define BLYNK_TEMPLATE_NAME "DIEU KHIEN LED"
+
+#define BLYNK_FIRMWARE_VERSION "0.1.0"
+
+#define BLYNK_PRINT Serial
+#define BLYNK_DEBUG
+#define USE_NODE_MCU_BOARD
+#define APP_DEBUG
+
+#include "BlynkEdgent.h"
+#include <stdlib.h>
+
+WidgetLED LedConnect(V0);
+unsigned long timeUpdate = millis();
+
+// Ð?nh nghia các d?a ch? thanh ghi UART
+#define UART0_BASE 0x60000000
+#define UART_CLKDIV(uart) (UART0_BASE + 0x14)
+#define UART_CONF0(uart) (UART0_BASE + 0x20)
+#define UART_STATUS(uart) (UART0_BASE + 0x1C)
+#define UART_FIFO(uart) (UART0_BASE + 0x00)
+
+// Ki?m tra n?u các macro dã du?c d?nh nghia
+#ifndef WRITE_PERI_REG
+#define WRITE_PERI_REG(addr, val) (*(volatile uint32_t *)(addr) = (val))
+#endif
+
+#ifndef READ_PERI_REG
+#define READ_PERI_REG(addr) (*(volatile uint32_t *)(addr))
+#endif
+
+#define UART_TX_EN (1 << 0)
+#define UART_RX_EN (1 << 1)
+#define UART_BIT_NUM_S 0
+#define UART_PARITY_EN (1 << 3)
+#define UART_STOP_BIT_NUM_S 4
+#define UART_RXFIFO_CNT_S 0
+#define UART_TXFIFO_CNT_S 16
+
+void uart_init(unsigned long baud_rate) {
+  unsigned int baud_setting = (80000000 / (baud_rate * 16)) - 1; // ESP8266 ch?y ? 80MHz
+  
+  // Thi?t l?p t?c d? baud
+  WRITE_PERI_REG(UART_CLKDIV(UART0_BASE), baud_setting);
+
+  // Thi?t l?p UART0 (8-bit, no parity, 1 stop bit)
+  WRITE_PERI_REG(UART_CONF0(UART0_BASE), (3 << UART_BIT_NUM_S) | (0 << UART_PARITY_EN) | (1 << UART_STOP_BIT_NUM_S));
+  
+  // B?t b? truy?n và nh?n UART
+  WRITE_PERI_REG(UART_CONF0(UART0_BASE), READ_PERI_REG(UART_CONF0(UART0_BASE)) | UART_TX_EN | UART_RX_EN);
+}
+
+// Hàm ki?m tra xem có d? li?u nh?n du?c không
+bool uart_available() {
+  return (READ_PERI_REG(UART_STATUS(UART0_BASE)) & (0xFF << UART_RXFIFO_CNT_S)) > 0;
+}
+
+// Hàm d?c m?t byte d? li?u t? UART
+char uart_read() {
+  while (!uart_available());
+  return (char)(READ_PERI_REG(UART_FIFO(UART0_BASE)) & 0xFF);
+}
+
+// Hàm g?i m?t byte d? li?u qua UART
+void uart_write(char data) {
+  while (READ_PERI_REG(UART_STATUS(UART0_BASE)) & (0xFF << UART_TXFIFO_CNT_S));
+  WRITE_PERI_REG(UART_FIFO(UART0_BASE), data);
+}
+
+// Hàm g?i nhi?u byte d? li?u qua UART
+void uart_write_bytes(const char *data, size_t length) {
+    for (size_t i = 0; i < length; i++) {
+        while (READ_PERI_REG(UART_STATUS(UART0_BASE)) & (0xFF << UART_TXFIFO_CNT_S)); // Ð?i cho d?n khi có ch? tr?ng trong FIFO
+        WRITE_PERI_REG(UART_FIFO(UART0_BASE), data[i]); // G?i d? li?u
+    }
+}
+String readString() {
+  String result = ""; // Chu?i k?t qu?
+  char buffer[50]; // Buffer d? luu d? li?u d?c du?c
+  int index = 0;
+
+  // Ð?c d? li?u t? Serial cho d?n khi g?p ký t? xu?ng dòng ho?c h?t b? d?m
+  while (true) {
+    while (uart_available() == 0);// Ð?i cho d?n khi có d? li?u s?n sàng
+    char c = uart_read();// Ð?c m?t ký t? t? Serial
+    // N?u g?p ký t? xu?ng dòng ho?c ký t? carriage return (CR), d?ng l?i
+    if (c == '\n' || c == '\r') {
+      break;}
+    if (index < sizeof(buffer) - 1) { // N?u buffer chua d?y, thêm ký t? vào k?t qu?
+      buffer[index++] = c;
+    }
+  }
+
+  buffer[index] = '\0'; // K?t thúc chu?i b?ng ký t? null
+  result = String(buffer); // Chuy?n d?i buffer thành chu?i
+  result.trim(); // Lo?i b? ký t? xu?ng dòng và kho?ng tr?ng không mong mu?n
+
+  return result; // Tr? v? chu?i k?t qu?
+}
+
+// Hàm chuy?n chu?i s? thành s? nguyên (int)
+int stringToInt( String &str) {
+  int result = 0;
+  int index = 0;
+
+  char* ptr = reinterpret_cast< char*>(&str[0]); // S? d?ng pointer d?n d? li?u bên trong d?i tu?ng String
+  while (ptr[index] != '\0') { // Duy?t t?ng ký t? cho d?n khi g?p ký t? k?t thúc chu?i
+    char c = ptr[index];
+    if (c >= '0' && c <= '9') { // Ki?m tra xem ký t? có ph?i là ch? s? không
+      result = result * 10 + (c - '0'); // Chuy?n ký t? thành s? và c?ng vào k?t qu?
+    } else {
+      // N?u g?p ký t? không ph?i s?, có th? x? lý l?i ? dây n?u c?n
+      return 0; // Tr? v? 0 ho?c giá tr? l?i n?u chu?i ch?a ký t? không h?p l?
+    }
+    index++;
+  }
+  return result;
+}
+
+void setup() {
+  Serial.begin(9600);  // Kh?i t?o UART v?i t?c d? 9600 baud
+  delay(100);
+  BlynkEdgent.begin();
+  pinMode(D1, OUTPUT);  // LED d?
+  pinMode(D2, OUTPUT);  // LED xanh lá
+}
+
+void loop() {
+  BlynkEdgent.run();
+
+
+  if (uart_available() > 0) {
+    String str = readString();
+    int data = stringToInt(str);
+    
+    // X? lý d? li?u nh?n du?c
+    if (data == 10) {
+      digitalWrite(D2, HIGH); // B?t LED d?
+      digitalWrite(D1, LOW);  // T?t LED xanh lá
+    } else if (data == 20) {
+      digitalWrite(D2, LOW);  // T?t LED d?
+      digitalWrite(D1, HIGH); // B?t LED xanh lá
+    } else if (data == 30) {
+      digitalWrite(D1, LOW);  // T?t LED d?
+      digitalWrite(D2, LOW);  // T?t LED xanh lá
+    } else if (data == 99) {
+      digitalWrite(D1, HIGH);  // T?t LED d?
+      digitalWrite(D2, HIGH);  // T?t LED xanh lá
+    }
+  }
+
+  if (millis() - timeUpdate > 1000) {
+    if (LedConnect.getValue()) {
+      LedConnect.off();
+    } else {
+      LedConnect.on();
+    }
+    timeUpdate = millis();
+  }
+}
+
+BLYNK_CONNECTED() {
+  Blynk.syncAll();
+}
+
+BLYNK_WRITE(V1) {
+  int p = param.asInt();
+  digitalWrite(D1, p);
+}
+
+BLYNK_WRITE(V2) {
+  int p = param.asInt();
+  digitalWrite(D2, p);
+}

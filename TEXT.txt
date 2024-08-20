@@ -1,0 +1,67 @@
+#define BLYNK_TEMPLATE_ID "TMPL6nKD1ScLU"
+#define BLYNK_TEMPLATE_NAME "DIEU KHIEN LED"
+
+#define BLYNK_FIRMWARE_VERSION        "0.1.0"
+
+#define BLYNK_PRINT Serial
+#define BLYNK_DEBUG
+#define USE_NODE_MCU_BOARD
+#define APP_DEBUG
+
+#include "BlynkEdgent.h"
+
+WidgetLED LedConnect(V0);
+unsigned long timeUpdate = millis();
+
+void setup()
+{
+  Serial.begin(9600);  // Kh?i t?o UART v?i t?c d? 9600 baud
+  delay(100);
+  BlynkEdgent.begin();
+  pinMode(D1, OUTPUT);  // LED d?
+  pinMode(D2, OUTPUT);  // LED xanh lá
+}
+
+void loop() {
+  BlynkEdgent.run();
+
+  if (Serial.available()) {
+    String data = Serial.readStringUntil('\n'); // Ð?c d? li?u t? UART cho d?n khi g?p ký t? newline
+    Serial.println("Received: " + data); // In d? li?u nh?n du?c ra Serial Monitor
+
+    // X? lý d? li?u nh?n du?c
+    if (data == "R") {
+      digitalWrite(D2, HIGH); // B?t LED xanh lá
+      digitalWrite(D1, LOW);  // T?t LED d?
+    } else if (data == "G") {
+      digitalWrite(D2, LOW);  // T?t LED xanh lá
+      digitalWrite(D1, HIGH); // B?t LED d?
+    } else if (data == "O") {
+      digitalWrite(D1, LOW);  // T?t LED d?
+      digitalWrite(D2, LOW);  // T?t LED xanh lá
+    }
+  }
+
+  if (millis() - timeUpdate > 1000) {
+    if (LedConnect.getValue()) {
+      LedConnect.off();
+    } else {
+      LedConnect.on();
+    }
+    timeUpdate = millis();
+  }
+}
+
+BLYNK_CONNECTED() {
+  Blynk.syncAll();
+}
+
+BLYNK_WRITE(V1) {
+  int p = param.asInt();
+  digitalWrite(D1, p);
+}
+
+BLYNK_WRITE(V2) {
+  int p = param.asInt();
+  digitalWrite(D2, p);
+}
